@@ -5,6 +5,8 @@ import { useAuth } from "../contexts/AuthContext";
 import { useNotification } from "../contexts/NotificationContext";
 import { useWebRTC } from "../hooks/useWebRTC";
 import CallModal from "./CallModal";
+import FileUpload from "./FileUpload";
+import FileMessage from "./FileMessage";
 import { Phone, Video } from "lucide-react";
 import io from "socket.io-client";
 type SocketType = ReturnType<typeof io>;
@@ -16,6 +18,14 @@ interface User {
   avatar?: string;
 }
 
+interface FileInfo {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
 interface Message {
   id: string;
   content: string;
@@ -23,6 +33,7 @@ interface Message {
   isRead: boolean;
   sender: User;
   receiver: User;
+  file?: FileInfo; // Add file support
   isNewMessage?: boolean;
 }
 
@@ -38,6 +49,14 @@ interface CallState {
   status: "outgoing" | "incoming" | "connected" | "ended";
   otherUser: User;
   isInitiator: boolean;
+}
+
+interface FileData {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
 }
 
 export default function ChatInterface() {
@@ -58,6 +77,7 @@ export default function ChatInterface() {
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<FileData | null>(null);
 
   // Call states
   const [currentCall, setCurrentCall] = useState<CallState | null>(null);
@@ -172,9 +192,12 @@ export default function ChatInterface() {
       setMessages((prev) => [...prev, message]);
 
       if (message.isNewMessage && !isPageVisible) {
+        const messageText = message.file
+          ? `📎 ${message.file.originalName}`
+          : message.content;
         showNotification(
           `New message from ${message.sender.username}`,
-          message.content,
+          messageText,
           "/favicon.ico"
         );
       }
@@ -182,6 +205,8 @@ export default function ChatInterface() {
 
     socketInstance.on("message_sent", (message: Message) => {
       setMessages((prev) => [...prev, message]);
+      // Clear selected file after message is sent
+      setSelectedFile(null);
     });
 
     socketInstance.on("messages_history", (history: Message[]) => {
@@ -375,6 +400,7 @@ export default function ChatInterface() {
       setSelectedUser(selectedUser);
       setMessages([]);
       setShowSidebar(false);
+      setSelectedFile(null); // Clear any selected file when switching users
 
       if (socket) {
         socket.emit("get_messages", { otherUserId: selectedUser.id });
@@ -387,16 +413,30 @@ export default function ChatInterface() {
   const sendMessage = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
-      if (!newMessage.trim() || !selectedUser || !socket) return;
+      if ((!newMessage.trim() && !selectedFile) || !selectedUser || !socket)
+        return;
 
-      socket.emit("send_message", {
+      const messageData: {
+        receiverId: string;
+        content: string;
+        fileId?: string;
+      } = {
         receiverId: selectedUser.id,
-        content: newMessage,
-      });
+        content:
+          newMessage.trim() ||
+          (selectedFile ? `📎 ${selectedFile.originalName}` : ""),
+      };
+
+      if (selectedFile) {
+        messageData.fileId = selectedFile.id;
+      }
+
+      socket.emit("send_message", messageData);
 
       setNewMessage("");
+      setSelectedFile(null);
     },
-    [newMessage, selectedUser, socket]
+    [newMessage, selectedFile, selectedUser, socket]
   );
 
   const scrollToBottom = () => {
@@ -413,6 +453,15 @@ export default function ChatInterface() {
       (total, count) => total + count,
       0
     );
+  };
+
+  // File handling
+  const handleFileSelect = (fileData: FileData) => {
+    setSelectedFile(fileData);
+  };
+
+  const removeSelectedFile = () => {
+    setSelectedFile(null);
   };
 
   // Call functions
@@ -820,22 +869,67 @@ export default function ChatInterface() {
                   }`}
                 >
                   <div
-                    className={`max-w-xs sm:max-w-md lg:max-w-lg xl:max-w-xl px-4 py-2 rounded-lg ${
+                    className={`max-w-xs sm:max-w-md lg:max-w-lg ${
                       message.sender.id === user?.id
                         ? "bg-blue-600 text-white"
                         : "bg-gray-200 text-gray-900"
+                    } ${
+                      message.file
+                        ? "bg-transparent p-0"
+                        : "px-4 py-2 rounded-lg"
                     }`}
                   >
-                    <p className="text-sm break-words">{message.content}</p>
-                    <div className="flex items-center justify-between mt-1">
-                      <p className="text-xs opacity-75">
+                    {message.file ? (
+                      <div className="space-y-2">
+                        <FileMessage
+                          file={message.file}
+                          className={
+                            message.sender.id === user?.id
+                              ? "bg-blue-50"
+                              : "bg-white"
+                          }
+                        />
+                        {message.content &&
+                          message.content !==
+                            `📎 ${message.file.originalName}` && (
+                            <div
+                              className={`px-4 py-2 rounded-lg ${
+                                message.sender.id === user?.id
+                                  ? "bg-blue-600 text-white"
+                                  : "bg-gray-200 text-gray-900"
+                              }`}
+                            >
+                              <p className="text-sm break-words">
+                                {message.content}
+                              </p>
+                            </div>
+                          )}
+                      </div>
+                    ) : (
+                      <p className="text-sm break-words">{message.content}</p>
+                    )}
+
+                    <div
+                      className={`flex items-center justify-between mt-1 ${
+                        message.file ? "px-3" : ""
+                      }`}
+                    >
+                      <p
+                        className={`text-xs ${
+                          message.file ? "text-gray-500" : "opacity-75"
+                        }`}
+                      >
                         {new Date(message.createdAt).toLocaleTimeString([], {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
                       </p>
                       {message.sender.id === user?.id && (
-                        <span className="text-xs opacity-75 ml-2">
+                        <span
+                          className={`text-xs ml-2 ${
+                            message.file ? "text-gray-500" : "opacity-75"
+                          }`}
+                        >
                           {message.isRead ? "✓✓" : "✓"}
                         </span>
                       )}
@@ -848,19 +942,83 @@ export default function ChatInterface() {
 
             {/* Message Input */}
             <div className="bg-white border-t border-gray-300 p-4 flex-shrink-0">
+              {/* Selected File Preview */}
+              {selectedFile && (
+                <div className="mb-3 p-3 bg-gray-50 rounded-lg border">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <svg
+                          className="w-4 h-4 text-blue-600"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
+                          />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-900 truncate max-w-48">
+                          {selectedFile.originalName}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {(selectedFile.size / 1024).toFixed(1)} KB
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={removeSelectedFile}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M6 18L18 6M6 6l12 12"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <form onSubmit={sendMessage}>
-                <div className="flex space-x-2 sm:space-x-4">
-                  <input
-                    type="text"
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    onFocus={handleInputFocus}
-                    placeholder="Type a message..."
-                    className="flex-1 border border-gray-300 rounded-full px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                <div className="flex items-end space-x-2 sm:space-x-4">
+                  {/* File Upload Button */}
+                  <FileUpload
+                    onFileSelect={handleFileSelect}
+                    disabled={!!currentCall || !!incomingCall}
                   />
+
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      onFocus={handleInputFocus}
+                      placeholder={
+                        selectedFile
+                          ? "Add a message (optional)..."
+                          : "Type a message..."
+                      }
+                      className="w-full border border-gray-300 rounded-full px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+
                   <button
                     type="submit"
-                    disabled={!newMessage.trim()}
+                    disabled={!newMessage.trim() && !selectedFile}
                     className="bg-blue-600 text-white px-4 sm:px-6 py-2 rounded-full hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Send

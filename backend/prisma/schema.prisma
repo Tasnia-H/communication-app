@@ -21,6 +21,7 @@ model User {
   receivedMessages Message[] @relation("MessageReceiver")
   initiatedCalls   Call[]    @relation("CallInitiator")
   receivedCalls    Call[]    @relation("CallReceiver")
+  sharedFiles      File[]    @relation("FileUploader")
 
   @@map("users")
 }
@@ -36,6 +37,10 @@ model Message {
 
   sender   User @relation("MessageSender", fields: [senderId], references: [id])
   receiver User @relation("MessageReceiver", fields: [receiverId], references: [id])
+
+  // Optional file attachment
+  fileId String?
+  file   File?   @relation(fields: [fileId], references: [id])
 
   @@map("messages")
 }
@@ -55,4 +60,22 @@ model Call {
   receiver User @relation("CallReceiver", fields: [receiverId], references: [id])
 
   @@map("calls")
+}
+
+model File {
+  id           String   @id @default(cuid())
+  originalName String   // Original filename
+  fileName     String   // Stored filename (UUID-based)
+  mimeType     String   // MIME type (image/jpeg, application/pdf, etc.)
+  size         Int      // File size in bytes
+  path         String   // File storage path
+  createdAt    DateTime @default(now())
+
+  uploaderId String
+  uploader   User @relation("FileUploader", fields: [uploaderId], references: [id])
+
+  // Messages that reference this file
+  messages Message[]
+
+  @@map("files")
 }

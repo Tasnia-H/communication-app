@@ -395,22 +395,35 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  // Message handling methods (existing)
+  // Message handling methods (updated with file support)
   @SubscribeMessage('send_message')
   async handleMessage(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { receiverId: string; content: string },
+    @MessageBody() data: { receiverId: string; content: string; fileId?: string },
   ) {
     try {
       const token = client.handshake.auth.token;
       const payload = this.jwtService.verify(token);
       const senderId = payload.sub;
 
+      // Validate file exists if fileId is provided
+      if (data.fileId) {
+        const file = await this.prisma.file.findUnique({
+          where: { id: data.fileId },
+        });
+        
+        if (!file || file.uploaderId !== senderId) {
+          client.emit('error', { message: 'Invalid file attachment' });
+          return;
+        }
+      }
+
       const message = await this.prisma.message.create({
         data: {
           content: data.content,
           senderId,
           receiverId: data.receiverId,
+          fileId: data.fileId || null,
         },
         include: {
           sender: {
@@ -418,6 +431,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
               id: true,
               username: true,
               email: true,
+              avatar: true,
             },
           },
           receiver: {
@@ -425,8 +439,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
               id: true,
               username: true,
               email: true,
+              avatar: true,
             },
           },
+          file: data.fileId ? {
+            select: {
+              id: true,
+              originalName: true,
+              mimeType: true,
+              size: true,
+              createdAt: true,
+            },
+          } : false,
         },
       });
 
@@ -441,6 +465,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       client.emit('message_sent', message);
     } catch (error) {
+      console.error('Error sending message:', error);
       client.emit('error', { message: 'Failed to send message' });
     }
   }
@@ -474,6 +499,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
               id: true,
               username: true,
               email: true,
+              avatar: true,
             },
           },
           receiver: {
@@ -481,6 +507,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
               id: true,
               username: true,
               email: true,
+              avatar: true,
+            },
+          },
+          file: {
+            select: {
+              id: true,
+              originalName: true,
+              mimeType: true,
+              size: true,
+              createdAt: true,
             },
           },
         },
@@ -491,6 +527,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       client.emit('messages_history', messages);
     } catch (error) {
+      console.error('Error getting messages:', error);
       client.emit('error', { message: 'Failed to get messages' });
     }
   }
@@ -531,6 +568,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         receiverId: currentUserId,
       });
     } catch (error) {
+      console.error('Error marking messages as read:', error);
       client.emit('error', { message: 'Failed to mark messages as read' });
     }
   }
@@ -574,6 +612,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         this.userActiveChats.delete(currentUserId);
       }
     } catch (error) {
+      console.error('Error setting active chat:', error);
       client.emit('error', { message: 'Failed to set active chat' });
     }
   }
@@ -587,6 +626,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       await this.sendUnreadCounts(currentUserId);
     } catch (error) {
+      console.error('Error getting unread counts:', error);
       client.emit('error', { message: 'Failed to get unread counts' });
     }
   }
