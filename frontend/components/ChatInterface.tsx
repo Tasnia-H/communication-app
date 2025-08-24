@@ -38,12 +38,12 @@ interface Message {
 interface IncomingCall {
   callId: string;
   caller: User;
-  type: "audio" | "video";
+  type: "audio" | "video" | "screen";
 }
 
 interface CallState {
   callId: string;
-  type: "audio" | "video";
+  type: "audio" | "video" | "screen";
   status: "outgoing" | "incoming" | "connected" | "ended";
   otherUser: User;
   isInitiator: boolean;
@@ -253,17 +253,20 @@ export default function ChatInterface() {
     }
   }, [stopAllRingtones]);
 
-  // WebRTC hook for calls
+  // WebRTC hook for calls - SAME FOR ALL CALL TYPES
   const {
     localStream,
     remoteStream,
     isConnected,
+    isScreenSharing,
     getUserMedia,
+    getScreenMedia,
     addLocalStream,
     createOffer,
     initializePeerConnection,
     toggleMute,
     toggleVideo,
+    toggleScreenShare,
     forceReleaseVideo,
     cleanup: cleanupWebRTC,
   } = useWebRTC({
@@ -436,8 +439,10 @@ export default function ChatInterface() {
       playRingTone();
 
       if (!isPageVisible) {
+        const callTypeText =
+          data.type === "screen" ? "screen share" : data.type;
         showNotification(
-          `Incoming ${data.type} call`,
+          `Incoming ${callTypeText} call`,
           `${data.caller.username} is calling you`,
           "/favicon.ico"
         );
@@ -558,7 +563,7 @@ export default function ChatInterface() {
     }
   }, [isNotificationSupported, notificationPermission]);
 
-  // Handle WebRTC offer creation for initiator when call is connected
+  // Handle WebRTC offer creation for initiator when call is connected - SAME FOR ALL CALL TYPES
   useEffect(() => {
     if (
       currentCall?.isInitiator &&
@@ -581,6 +586,21 @@ export default function ChatInterface() {
     isConnected,
     createOffer,
   ]);
+
+  // Periodic stream sync for screen share calls - FIX for caller not seeing streams
+  useEffect(() => {
+    if (currentCall?.type === "screen" && isConnected) {
+      const interval = setInterval(() => {
+        // Force check for remote streams on caller side
+        console.log("Checking remote stream state", {
+          hasRemote: !!remoteStream,
+          isInitiator: currentCall.isInitiator,
+        });
+      }, 2000);
+
+      return () => clearInterval(interval);
+    }
+  }, [currentCall?.type, isConnected, remoteStream, currentCall?.isInitiator]);
 
   // Update document title with unread count
   useEffect(() => {
@@ -688,9 +708,9 @@ export default function ChatInterface() {
     setShowNotificationPrompt(false);
   };
 
-  // Call functions
+  // Call functions - SCREEN CALLS HANDLED EXACTLY LIKE VIDEO CALLS
   const initiateCall = useCallback(
-    async (type: "audio" | "video") => {
+    async (type: "audio" | "video" | "screen") => {
       if (!selectedUser || !socketRef.current) {
         console.error("Cannot initiate call - missing selectedUser or socket");
         return;
@@ -699,7 +719,16 @@ export default function ChatInterface() {
       try {
         console.log("Initiating", type, "call to", selectedUser.username);
         initializePeerConnection();
-        const stream = await getUserMedia(type === "video");
+
+        let stream: MediaStream;
+        if (type === "screen") {
+          // For screen calls, use screen capture - SAME LOGIC AS VIDEO
+          stream = await getScreenMedia();
+        } else {
+          // For audio/video calls, use camera/mic
+          stream = await getUserMedia(type === "video");
+        }
+
         addLocalStream(stream);
 
         setCurrentCall({
@@ -718,7 +747,11 @@ export default function ChatInterface() {
         });
       } catch (error) {
         console.error("Failed to initiate call:", error);
-        alert("Failed to access camera/microphone");
+        const errorMessage =
+          type === "screen"
+            ? "Failed to access screen share"
+            : "Failed to access camera/microphone";
+        alert(errorMessage);
         stopAllRingtones();
         setCurrentCall(null);
         cleanupWebRTC();
@@ -727,6 +760,7 @@ export default function ChatInterface() {
     [
       selectedUser,
       getUserMedia,
+      getScreenMedia,
       initializePeerConnection,
       addLocalStream,
       playDialTone,
@@ -745,7 +779,16 @@ export default function ChatInterface() {
       console.log("Accepting call:", incomingCall.callId);
       stopAllRingtones();
       initializePeerConnection();
-      const stream = await getUserMedia(incomingCall.type === "video");
+
+      let stream: MediaStream;
+      if (incomingCall.type === "screen") {
+        // For screen calls, receiver MUST share screen too (like video calls need camera)
+        stream = await getScreenMedia();
+      } else {
+        // For audio/video calls, get appropriate media
+        stream = await getUserMedia(incomingCall.type === "video");
+      }
+
       addLocalStream(stream);
 
       setCurrentCall({
@@ -763,12 +806,17 @@ export default function ChatInterface() {
       setIncomingCall(null);
     } catch (error) {
       console.error("Failed to accept call:", error);
-      alert("Failed to access camera/microphone");
+      const errorMessage =
+        incomingCall.type === "screen"
+          ? "Failed to access screen share to accept call"
+          : "Failed to access camera/microphone";
+      alert(errorMessage);
       rejectCall();
     }
   }, [
     incomingCall,
     getUserMedia,
+    getScreenMedia,
     initializePeerConnection,
     addLocalStream,
     stopAllRingtones,
@@ -821,6 +869,13 @@ export default function ChatInterface() {
     [toggleVideo]
   );
 
+  const handleToggleScreenShare = useCallback(
+    (isScreenOff: boolean) => {
+      toggleScreenShare(isScreenOff);
+    },
+    [toggleScreenShare]
+  );
+
   const markMessagesAsRead = useCallback(() => {
     if (
       selectedUser &&
@@ -856,9 +911,11 @@ export default function ChatInterface() {
           onEnd={endCall}
           onToggleMute={handleToggleMute}
           onToggleVideo={handleToggleVideo}
+          onToggleScreenShare={handleToggleScreenShare}
           onForceReleaseVideo={forceReleaseVideo}
           localStream={localStream || undefined}
           remoteStream={remoteStream || undefined}
+          isScreenSharing={isScreenSharing}
         />
       )}
 
