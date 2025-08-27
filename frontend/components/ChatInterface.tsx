@@ -32,7 +32,9 @@ interface Message {
   fileName?: string;
   fileSize?: number;
   fileType?: string;
+  fileUrl?: string; // Added for fallback file URLs
   isReceiverOnline?: boolean;
+  isFallbackUpload?: boolean; // Added to track fallback uploads
 }
 
 interface IncomingCall {
@@ -84,6 +86,7 @@ export default function ChatInterface() {
     Map<string, FileTransferInfo>
   >(new Map());
   const [isUserOnline, setIsUserOnline] = useState<boolean>(false);
+  const [isUploadingFile, setIsUploadingFile] = useState<boolean>(false);
 
   // Call states
   const [currentCall, setCurrentCall] = useState<CallState | null>(null);
@@ -130,7 +133,7 @@ export default function ChatInterface() {
     currentUserId: user?.id || "",
     otherUserId: selectedUser?.id || null,
     onFileReceived: (file, metadata) => {
-      console.log("File received:", file.name);
+      console.log("File received via P2P:", file.name);
       const messageId = metadata.messageId;
       if (messageId) {
         setFileTransfers((prev) => {
@@ -174,6 +177,44 @@ export default function ChatInterface() {
   useEffect(() => {
     establishConnectionRef.current = establishConnection;
   }, [establishConnection]);
+
+  // Fallback file upload function
+  const uploadFileToServer = useCallback(
+    async (file: File, receiverId: string): Promise<boolean> => {
+      if (!token) return false;
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("receiverId", receiverId);
+
+      try {
+        setIsUploadingFile(true);
+        console.log("Uploading file to server as fallback:", file.name);
+
+        const response = await fetch("http://localhost:3001/files/upload", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+        });
+
+        if (response.ok) {
+          console.log("File uploaded to server successfully");
+          return true;
+        } else {
+          console.error("Server upload failed:", response.statusText);
+          return false;
+        }
+      } catch (error) {
+        console.error("Error uploading file to server:", error);
+        return false;
+      } finally {
+        setIsUploadingFile(false);
+      }
+    },
+    [token]
+  );
 
   // Debug connection state (development only)
   useEffect(() => {
@@ -322,9 +363,12 @@ export default function ChatInterface() {
       // Show notification if page is not visible
       if (message.isNewMessage && !isPageVisible) {
         if (message.type === "file") {
+          const transferMethod = message.isFallbackUpload ? "server" : "P2P";
           showNotification(
             `New file from ${message.sender.username}`,
-            `${message.fileName} (${formatFileSize(message.fileSize || 0)})`,
+            `${message.fileName} (${formatFileSize(
+              message.fileSize || 0
+            )}) via ${transferMethod}`,
             "/favicon.ico"
           );
         } else {
@@ -336,11 +380,12 @@ export default function ChatInterface() {
         }
       }
 
-      // Handle file message for DataChannel transfer
+      // Handle file message for DataChannel transfer (only if not fallback upload)
       if (
         message.type === "file" &&
         message.isReceiverOnline &&
-        message.sender.id !== user?.id
+        message.sender.id !== user?.id &&
+        !message.isFallbackUpload
       ) {
         console.log(
           "File message received, transfer will happen via DataChannel"
@@ -351,8 +396,12 @@ export default function ChatInterface() {
     const handleMessageSent = (message: Message) => {
       setMessages((prev) => [...prev, message]);
 
-      // If it's a file message, store the file for the sender
-      if (message.type === "file" && selectedFileRef.current) {
+      // If it's a file message and not a fallback upload, handle P2P transfer
+      if (
+        message.type === "file" &&
+        selectedFileRef.current &&
+        !message.isFallbackUpload
+      ) {
         const file = selectedFileRef.current;
 
         // Store the file for the sender to preview/download
@@ -395,6 +444,11 @@ export default function ChatInterface() {
           }
         }
 
+        setSelectedFile(null);
+      }
+
+      // Clear selected file for fallback uploads (handled by server)
+      if (message.isFallbackUpload) {
         setSelectedFile(null);
       }
     };
@@ -653,14 +707,14 @@ export default function ChatInterface() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check file size (10MB limit)
-    if (file.size > 10 * 1024 * 1024) {
-      alert("File size must be less than 10MB");
+    // Check file size (10MB limit for P2P, 50MB for server)
+    if (file.size > 50 * 1024 * 1024) {
+      alert("File size must be less than 50MB");
       e.target.value = "";
       return;
     }
 
-    // Proactively establish WebRTC connection when user selects a file
+    // Proactively establish WebRTC connection when user selects a file (for P2P)
     if (connectionState === "disconnected" && establishConnectionRef.current) {
       console.log(
         "Establishing WebRTC connection proactively for file transfer"
@@ -672,17 +726,64 @@ export default function ChatInterface() {
     e.target.value = "";
   };
 
-  const sendFileMessage = useCallback(() => {
+  const sendFileMessage = useCallback(async () => {
     if (!selectedFile || !selectedUser || !socketRef.current) return;
 
-    socketRef.current.emit("send_file_message", {
-      receiverId: selectedUser.id,
-      content: `Sent a file: ${selectedFile.name}`,
-      fileName: selectedFile.name,
-      fileSize: selectedFile.size,
-      fileType: selectedFile.type,
-    });
-  }, [selectedFile, selectedUser]);
+    // Strategy: Try P2P first for files <= 10MB and when user is online
+    // Otherwise, use server fallback
+    const shouldTryP2P =
+      selectedFile.size <= 10 * 1024 * 1024 && isUserOnline && !currentCall; // Don't try P2P during calls
+
+    if (shouldTryP2P) {
+      console.log("Attempting P2P file transfer first");
+
+      // Send file message first (this triggers P2P attempt)
+      socketRef.current.emit("send_file_message", {
+        receiverId: selectedUser.id,
+        content: `Sent a file: ${selectedFile.name}`,
+        fileName: selectedFile.name,
+        fileSize: selectedFile.size,
+        fileType: selectedFile.type,
+      });
+
+      // Set a timeout to fallback to server upload if P2P fails
+      setTimeout(async () => {
+        // Check if P2P transfer started successfully
+        const isP2PActive = isChannelReady && connectionState === "connected";
+
+        if (!isP2PActive) {
+          console.log(
+            "P2P transfer failed/timeout, falling back to server upload"
+          );
+          const success = await uploadFileToServer(
+            selectedFile,
+            selectedUser.id
+          );
+
+          if (!success) {
+            alert("Failed to send file via both P2P and server");
+          }
+        }
+      }, 5000); // 5 second timeout for P2P establishment
+    } else {
+      console.log(
+        "Using server upload (file too large, user offline, or in call)"
+      );
+      const success = await uploadFileToServer(selectedFile, selectedUser.id);
+
+      if (!success) {
+        alert("Failed to upload file to server");
+      }
+    }
+  }, [
+    selectedFile,
+    selectedUser,
+    isUserOnline,
+    currentCall,
+    isChannelReady,
+    connectionState,
+    uploadFileToServer,
+  ]);
 
   const removeSelectedFile = () => {
     setSelectedFile(null);
@@ -972,6 +1073,7 @@ export default function ChatInterface() {
               newMessage={newMessage}
               selectedFile={selectedFile}
               isUserOnline={isUserOnline}
+              isUploadingFile={isUploadingFile}
               onMessageChange={setNewMessage}
               onSendMessage={sendMessage}
               onSendFile={sendFileMessage}

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ChatGateway } from './chat.gateway';
 import { JwtModule } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,5 +11,6 @@ import { PrismaService } from '../prisma/prisma.service';
     }),
   ],
   providers: [ChatGateway, PrismaService],
+  exports: [ChatGateway], // Export ChatGateway so FilesController can use it
 })
 export class ChatModule {}

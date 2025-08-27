@@ -21,6 +21,8 @@ interface Message {
   fileName?: string;
   fileSize?: number;
   fileType?: string;
+  fileUrl?: string; // Added for fallback file URLs
+  isFallbackUpload?: boolean; // Added to track fallback uploads
 }
 
 interface FileTransferInfo {
@@ -70,8 +72,10 @@ export default function MessageList({
                 fileSize={message.fileSize || 0}
                 fileType={message.fileType || "application/octet-stream"}
                 fileData={transferInfo?.file}
+                fileUrl={message.fileUrl} // Pass the file URL for fallback downloads
                 isOwn={isOwn}
                 transferProgress={transferInfo?.progress}
+                isFallbackUpload={message.isFallbackUpload} // Pass fallback flag
               />
             ) : (
               <div

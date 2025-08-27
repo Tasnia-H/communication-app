@@ -13,18 +13,21 @@ import {
   Check,
   AlertCircle,
 } from "lucide-react";
+import { useAuth } from "../contexts/AuthContext";
 
 interface FileMessageProps {
   fileName: string;
   fileSize: number;
   fileType: string;
   fileData?: File;
+  fileUrl?: string; // New prop for fallback file URL
   isOwn: boolean;
   onDownload?: () => void;
   transferProgress?: {
     percentage: number;
     status: "pending" | "transferring" | "completed" | "failed";
   };
+  isFallbackUpload?: boolean; // Flag to indicate fallback upload
 }
 
 export default function FileMessage({
@@ -32,11 +35,15 @@ export default function FileMessage({
   fileSize,
   fileType,
   fileData,
+  fileUrl,
   isOwn,
   onDownload,
   transferProgress,
+  isFallbackUpload = false,
 }: FileMessageProps) {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const { token } = useAuth();
 
   useEffect(() => {
     // Create download URL if file data is available
@@ -75,14 +82,61 @@ export default function FileMessage({
     return <File className="w-5 h-5" />;
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (downloadUrl && fileData) {
+      // P2P file available - download directly
       const a = document.createElement("a");
       a.href = downloadUrl;
       a.download = fileName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+    } else if (fileUrl && token) {
+      // Fallback to server download
+      setIsDownloading(true);
+      try {
+        const response = await fetch(`http://localhost:3001${fileUrl}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          credentials: "include", // Include credentials for CORS
+        });
+
+        if (response.ok) {
+          // Get the blob and create download
+          const blob = await response.blob();
+
+          // Create a download URL from the blob
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = fileName;
+          a.style.display = "none";
+
+          // Add to DOM, click, and remove
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+
+          // Clean up the blob URL
+          setTimeout(() => URL.revokeObjectURL(url), 100);
+        } else {
+          const errorText = await response.text();
+          console.error("Download failed:", response.status, errorText);
+          alert(
+            `Failed to download file: ${response.status} ${response.statusText}`
+          );
+        }
+      } catch (error) {
+        console.error("Download error:", error);
+        if (error instanceof Error) {
+          alert(`Failed to download file: ${error.message}`);
+        } else {
+          alert("Failed to download file: Network error");
+        }
+      } finally {
+        setIsDownloading(false);
+      }
     } else if (onDownload) {
       onDownload();
     }
@@ -94,8 +148,11 @@ export default function FileMessage({
   // Determine the status message
   const getStatusMessage = () => {
     if (isOwn) {
+      if (isFallbackUpload) {
+        return "Sent via Mutler";
+      }
       if (fileData) {
-        return "Sent";
+        return "Sent via WebRTC DataChannel";
       }
       if (transferProgress?.status === "transferring") {
         return "Sending...";
@@ -105,8 +162,11 @@ export default function FileMessage({
       }
       return "Sent";
     } else {
+      if (isFallbackUpload) {
+        return "Received via Mutler";
+      }
       if (fileData) {
-        return "Received";
+        return "Received via WebRTC DataChannel";
       }
       if (transferProgress?.status === "transferring") {
         return "Receiving...";
@@ -114,9 +174,15 @@ export default function FileMessage({
       if (transferProgress?.status === "failed") {
         return "Failed to receive";
       }
+      if (fileUrl) {
+        return "Available for download";
+      }
       return "File not available";
     }
   };
+
+  // Check if file is available for download
+  const isFileAvailable = fileData || fileUrl;
 
   return (
     <div
@@ -186,7 +252,7 @@ export default function FileMessage({
                 isOwn ? "text-blue-100" : "text-gray-600"
               }`}
             >
-              {fileData ? (
+              {isFileAvailable ? (
                 <Check className="w-3 h-3" />
               ) : transferProgress?.status === "failed" ? (
                 <AlertCircle className="w-3 h-3" />
@@ -194,18 +260,19 @@ export default function FileMessage({
               <span>{getStatusMessage()}</span>
             </div>
 
-            {/* Download button - shown for both sender and receiver when file is available */}
-            {fileData && downloadUrl && (
+            {/* Download button - shown when file is available */}
+            {isFileAvailable && (
               <button
                 onClick={handleDownload}
-                className={`mt-2 flex items-center space-x-1 text-xs font-medium ${
+                disabled={isDownloading}
+                className={`mt-2 flex items-center space-x-1 text-xs font-medium disabled:opacity-50 ${
                   isOwn
                     ? "text-blue-100 hover:text-white"
                     : "text-blue-600 hover:text-blue-700"
                 }`}
               >
                 <Download className="w-3 h-3" />
-                <span>Download</span>
+                <span>{isDownloading ? "Downloading..." : "Download"}</span>
               </button>
             )}
           </div>

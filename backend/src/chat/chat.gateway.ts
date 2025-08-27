@@ -87,6 +87,31 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  // Method to notify about fallback file uploads (called from files controller)
+  async notifyFileUploadComplete(message: any) {
+    const receiverSocketId = this.connectedUsers.get(message.receiverId);
+    
+    if (receiverSocketId) {
+      this.server.to(receiverSocketId).emit('receive_message', {
+        ...message,
+        isNewMessage: true,
+        isReceiverOnline: true,
+        isFallbackUpload: true, // Flag to indicate this was a fallback upload
+      });
+      await this.sendUnreadCounts(message.receiverId);
+    }
+
+    // Notify sender
+    const senderSocketId = this.connectedUsers.get(message.senderId);
+    if (senderSocketId) {
+      this.server.to(senderSocketId).emit('message_sent', {
+        ...message,
+        isReceiverOnline: !!receiverSocketId,
+        isFallbackUpload: true,
+      });
+    }
+  }
+
   // File Transfer WebRTC Signaling Handlers
   @SubscribeMessage('file_webrtc_offer')
   handleFileWebRTCOffer(
