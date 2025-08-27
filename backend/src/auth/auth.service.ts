@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
+import { ManualAuthService } from './manual-auth.service';
+import { GoogleAuthService } from './google-auth.service';
 import * as bcrypt from 'bcryptjs';
 
 interface GoogleUser {
@@ -15,64 +17,17 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
+    private manualAuthService: ManualAuthService,
+    private googleAuthService: GoogleAuthService,
   ) {}
 
+  // Keep all original methods for backward compatibility
   async validateUser(email: string, password: string): Promise<any> {
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (user && user.password && await bcrypt.compare(password, user.password)) {
-      const { password, ...result } = user;
-      return result;
-    }
-    return null;
+    return this.manualAuthService.validateCredentials(email, password);
   }
 
   async validateGoogleUser(googleUser: GoogleUser): Promise<any> {
-    const { googleId, email, username, avatar } = googleUser;
-    
-    // Check if user exists by Google ID
-    let user = await this.prisma.user.findUnique({
-      where: { googleId },
-    });
-
-    if (!user) {
-      // Check if user exists by email
-      user = await this.prisma.user.findUnique({
-        where: { email },
-      });
-
-      if (user) {
-        // Link Google account to existing user
-        user = await this.prisma.user.update({
-          where: { email },
-          data: {
-            googleId,
-            avatar,
-          },
-        });
-      } else {
-        // Create new user
-        let uniqueUsername = username;
-        let counter = 1;
-        
-        // Ensure username is unique
-        while (await this.prisma.user.findUnique({ where: { username: uniqueUsername } })) {
-          uniqueUsername = `${username}${counter}`;
-          counter++;
-        }
-
-        user = await this.prisma.user.create({
-          data: {
-            googleId,
-            email,
-            username: uniqueUsername,
-            avatar,
-          },
-        });
-      }
-    }
-
-    const { password, ...result } = user;
-    return result;
+    return this.googleAuthService.validateGoogleUser(googleUser);
   }
 
   async login(user: any) {
@@ -89,16 +44,6 @@ export class AuthService {
   }
 
   async register(email: string, username: string, password: string) {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        username,
-        password: hashedPassword,
-      },
-    });
-    
-    const { password: _, ...result } = user;
-    return result;
+    return this.manualAuthService.createUser(email, username, password);
   }
 }
