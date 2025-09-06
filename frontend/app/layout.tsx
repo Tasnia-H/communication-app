@@ -7,8 +7,8 @@ import { NotificationProvider } from "@/contexts/NotificationContext";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Solar-ICT Chat App",
-  description: "A real-time messaging platform for Solar-ICT",
+  title: "Communication App",
+  description: "A real-time communication platform",
 };
 
 export default function RootLayout({

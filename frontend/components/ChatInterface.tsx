@@ -646,8 +646,8 @@ export default function ChatInterface() {
     const totalUnread = getTotalUnreadCount();
     document.title =
       totalUnread > 0
-        ? `(${totalUnread}) Solar-ICT Chat App`
-        : "Solar-ICT Chat App";
+        ? `(${totalUnread}) Communication App`
+        : "Communication App";
   }, [unreadCounts]);
 
   // Utility functions
